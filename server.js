@@ -133,9 +133,8 @@ server.route({
           omx.play('http://127.0.0.1:' + connection.server.address().port + '/');
           omx.on('ended', function() { stop(); });
           return reply();
-        }
-        });
       });
+    });
     }
     else {
       return reply(Boom.badRequest('Torrent URL Required'));
