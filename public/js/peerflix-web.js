@@ -93,6 +93,7 @@ $(document).ready(function() {
   });
 
   $('#search-torrents').click(function() {
+    $('#search-torrents').value = "Loading"
     var searchStr = $('#torrent-query').val();
     if (!searchStr.length) { $('#torrent-table').empty(); return; }
     $.get('query', { 'q': searchStr })

@@ -16,6 +16,7 @@ var fs = require('fs');
 var kickass = require('kickass-torrent');
 var peerflix = require('peerflix');
 var omx = require('omxctrl');
+var proc = require('child_process')
 
 // Configs
 var PORT = process.env.PORT || process.argv[2] || 8080;
@@ -132,6 +133,7 @@ server.route({
           omx.play('http://127.0.0.1:' + connection.server.address().port + '/');
           omx.on('ended', function() { stop(); });
           return reply();
+        }
         });
       });
     }
@@ -164,7 +166,9 @@ server.route({
   handler: function (request, reply) {
     var query = request.query.q;
     if (query) {
-      kickass(query, function(err, response){
+      kickass({
+        q: query}
+    , function(err, response){
         if (err) { return reply(Boom.badRequest(err)); }
         var filteredResults = [];
         response.list.forEach(function(result) {
