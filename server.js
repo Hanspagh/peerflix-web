@@ -3,6 +3,7 @@
 var Hapi = require('hapi');
 var Boom = require('boom');
 var Good = require('good');
+var opensubtitles = require("subtitler");
 var GoodFile = require('good-file');
 var GoodConsole = require('good-console');
 var ip = require('ip');
@@ -17,6 +18,11 @@ var kickass = require('kickass-torrent');
 var peerflix = require('peerflix');
 var omx = require('omxctrl');
 var proc = require('child_process')
+var Download = require('download');
+ var AdmZip = require('adm-zip');
+var path = require("path");
+var VLC_ARGS = '-q --video-on-top --play-and-exit'
+var OMX_EXEC = 'omxplayer -r -o hdmi'
 
 // Configs
 var PORT = process.env.PORT || process.argv[2] || 8080;
@@ -51,19 +57,54 @@ var clearTorrentCache = function() {
     }
     files.forEach(function(file) {
       if (file.substr(0, 9) === 'peerflix-') {
-        rimraf.sync(path.join(tempDir, file));
+        console.log(path.join(tempDir, file));
+        rimraf(path.join(tempDir, file), function(error) {
+          console.log('Cache cleared' + error);
+        });
       }
     });
   });
 };
 
 var stop = function() {
-  clearTorrentCache();
   if (!connection) { return; }
   connection.destroy();
   connection = null;
   omx.stop();
+  clearTorrentCache();
 };
+
+function downloadSubs(movieName, callback) {
+  opensubtitles.api.login()
+  .done(function(token){
+    console.log(token);
+      opensubtitles.api.searchForTitle(token, "eng", movieName)
+      .done(function(results){
+        console.log(path.join(tempDir, 'peerflix-sub') + path.sep + results[0].SubFileName + '.zip');
+        new Download()
+        .get(results[0].ZipDownloadLink)
+        .dest(path.join(tempDir, 'peerflix-sub'))
+        .rename(results[0].SubFileName + '.zip')
+        .run(function(err, files) {
+          var zip = new AdmZip(path.join(tempDir, 'peerflix-sub') + path.sep + results[0].SubFileName + '.zip');
+          zip.extractAllTo(path.join(tempDir, 'peerflix-sub'),true);
+          callback(path.join(tempDir, 'peerflix-sub') + path.sep + results[0].SubFileName)
+        });
+      });
+  });
+}
+
+function startPlayer(localHref) {
+  if(/^win/.test(process.platform)) {
+    var vlcPath = 'C:\\Program Files (x86)\\VideoLAN\\VLC\\vlc'
+    VLC_ARGS = VLC_ARGS.split(' ')
+    VLC_ARGS.unshift(localHref)
+    proc.execFile(vlcPath, VLC_ARGS)
+  } else {
+    omx.play(localHref);
+    omx.on('ended', function() { stop(); });
+}
+}
 
 // Server Setup
 var server = new Hapi.Server();
@@ -71,20 +112,8 @@ server.connection({ port: PORT });
 
 if (LOG_ENABLED) {
   var options = { logRequestPayload: true };
-  var opsPath = path.normalize(__dirname +  '/log/operation');
-  var errsPath = path.normalize(__dirname + '/log/error');
-  var reqsPath = path.normalize(__dirname + '/log/request');
-  mkdirp.sync(opsPath);
-  mkdirp.sync(errsPath);
-  mkdirp.sync(reqsPath);
-  var configWithPath = function(path) {
-    return { path: path, extension: 'log', rotate: 'daily', format: 'YYYY-MM-DD-X', prefix:'peerflix-web' };
-  };
   var consoleReporter = new GoodConsole({ log: '*', response: '*' });
-  var opsReporter = new GoodFile(configWithPath(opsPath), { log: '*', ops: '*' });
-  var errsReporter = new GoodFile(configWithPath(errsPath), { log: '*', error: '*' });
-  var reqsReporter = new GoodFile(configWithPath(reqsPath), { log: '*', response: '*' });
-  options.reporters = [ consoleReporter, opsReporter, errsReporter, reqsReporter ];
+  options.reporters = [ consoleReporter];
   server.register({ register: Good, options: options}, function(err) { if (err) { throw(err); } });
 }
 
@@ -104,6 +133,14 @@ server.route({
 
 server.route({
   method: 'GET',
+  path: '/sub',
+  handler: function (request, reply) {
+    return reply(downloadSubs("Ice Age"));
+  }
+});
+
+server.route({
+  method: 'GET',
   path: '/assets/{param*}',
   handler: {
     directory: {
@@ -117,11 +154,11 @@ server.route({
   path: '/play',
   handler: function (request, reply) {
     var torrentUrl = request.payload.url;
+    var subs = request.payload.subs;
     if (torrentUrl) {
       readTorrent(torrentUrl, function(err, torrent) {
         if (err) { return reply(Boom.badRequest(err)); }
         if (connection) { stop(); }
-
         connection = peerflix(torrent, {
           connections: 100,
           path: path.join(tempDir, 'peerflix-' + uuid.v4()),
@@ -130,9 +167,19 @@ server.route({
 
         connection.server.on('listening', function() {
           if (!connection) { return reply(Boom.badRequest('Stream was interrupted')); }
-          omx.play('http://127.0.0.1:' + connection.server.address().port + '/');
-          omx.on('ended', function() { stop(); });
-          return reply();
+          console.log('playing on http://127.0.0.1:' + connection.server.address().port + '/ with subs=' + subs)
+          var localHref = 'http://127.0.0.1:' + connection.server.address().port + '/'
+          if (subs === 'true') {
+            downloadSubs(torrent.name, function(name) {
+              VLC_ARGS += ' --sub-file=' + name
+              OMX_EXEC += ' --subtitles ' + name
+              startPlayer(localHref);
+              return reply();
+            });
+          } else {
+            startPlayer(localHref);
+            return reply();
+          }
       });
     });
     }
@@ -165,9 +212,7 @@ server.route({
   handler: function (request, reply) {
     var query = request.query.q;
     if (query) {
-      kickass({
-        q: query}
-    , function(err, response){
+      kickass({q: query}, function(err, response){
         if (err) { return reply(Boom.badRequest(err)); }
         var filteredResults = [];
         response.list.forEach(function(result) {

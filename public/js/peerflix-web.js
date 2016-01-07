@@ -1,5 +1,5 @@
 $(document).ready(function() {
-
+  $("[name='my-checkbox']").bootstrapSwitch();
   var isPaused = false;
 
   (function poll() {
@@ -58,8 +58,9 @@ $(document).ready(function() {
     $('#loader').show();
     showPauseIcon(true);
     var url = $('#torrent-url').val();
+    var subs = $("[name='my-checkbox']").bootstrapSwitch('state');
     $('#torrent-url').val('');
-    $.post('play', { 'url': url })
+    $.post('play', { 'url': url, subs: subs})
     .fail(function() {
       $('#loader').hide();
       $('#stop-wrapper').hide();
